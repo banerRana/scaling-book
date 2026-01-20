@@ -373,11 +373,15 @@ Saving only the seven matmul outputs (Q, K, V, O, W₁, W₂, W₃) means the ba
 
 $$QK^{\top} \quad\text{and}\quad \operatorname{softmax}(QK^{\top})V.$$
 
+in order to obtain $\frac{\partial L}{\partial W_\text{O}}$.
+
 Each is a $T \times T$ matmul batched over $B$ sequences and $N$ heads, so the additional FLOPs are
 
 $$4 \; B \, T^{2} \, N \, H.$$
 
-All other recomputed operations are only $O(BTD)$.
+Other recomputed operations are:
+1. $O(BTD)$ for $\frac{\partial L}{\partial W_\text{In1}}$ and $\frac{\partial L}{\partial W_\text{In2}}$.
+2. And $O(BTF)$ for $\frac{\partial L}{\partial W_\text{Out}}$.
 
 {% enddetails %}
 
