@@ -106,10 +106,14 @@ Correspondingly, JAX provides APIs for each of these modes:
 import jax
 import jax.numpy as jnp
 
-# Running on a TPU v5e 4x2. This assigns names to the two physical axes of the hardware.
-mesh = jax.make_mesh(axis_shapes=(4, 2), axis_names=('X', 'Y'))
+Auto = jax.sharding.AxisType.Auto
 
-# This tells JAX to use this mesh for all operations, so you can just specify the PartitionSpec P.
+# This creates a fake set of 8 CPU devices so you can run this on a CPU without TPUs.
+jax.config.update("jax_num_cpu_devices", 8)
+
+# This creates a 2D 4x2 mesh with axis names X and Y that JAX uses by default.
+# We explicitly tell JAX to let the XLA compiler infer sharding along these axes.
+mesh = jax.make_mesh(axis_shapes=(4, 2), axis_names=('X', 'Y'), axis_types=(Auto, Auto))
 jax.set_mesh(mesh)
 
 # We create a matrix W and input activations In sharded across our devices.
@@ -154,13 +158,15 @@ We can see the matmul (the fusion) and the AllReduce above. Pay particular atten
 import jax
 import jax.numpy as jnp
 
-mesh = jax.make_mesh((4, 2), ('X', 'Y'))
+Auto = jax.sharding.AxisType.Auto
+
+mesh = jax.make_mesh((4, 2), ('X', 'Y'), (Auto, Auto))
 jax.set_mesh(mesh)
 
-def matmul(x, Win, Wout):
-  hidden = jnp.einsum('bd,df->bf', x, Win)
+def matmul(x, W_in, W_out):
+  hidden = jnp.einsum('bd,df->bf', x, W_in)
   hidden = jax.lax.with_sharding_constraint(hidden, jax.P('X', 'Y'))
-  return jnp.einsum('bf,df->bd', hidden, Wout)
+  return jnp.einsum('bf,df->bd', hidden, W_out)
 ```
 
 This makes up about 60% of JAX parallel programming in the automatic partitioning world where you control the intermediate shardings via `jax.lax.with_sharding_constraint`. But "compiler tickling" is famously not a fun programming model. You could annotate every intermediate variable and still not know if you'll get the right outcome. Instead, what if JAX itself could handle and control sharding propagation?
@@ -172,12 +178,12 @@ Explicit sharding (or "sharding in types") looks a lot like automatic sharding, 
 ```py
 import jax
 import jax.numpy as jnp
-import jax.sharding as shd
 import numpy as np
 
+Explicit = jax.sharding.AxisType.Explicit
+
 # Running on a TPU v5e 2x2. This assigns names to the two physical axes of the hardware.
-mesh = jax.make_mesh(axis_shapes=(2, 2), axis_names=('X', 'Y'),
-                                       axis_types=(shd.AxisType.Explicit, shd.AxisType.Explicit))
+mesh = jax.make_mesh(axis_shapes=(2, 2), axis_names=('X', 'Y'), axis_types=(Explicit, Explicit))
 
 # This tells JAX to use this mesh for all operations, so you can just specify the PartitionSpec P.
 jax.set_mesh(mesh)
@@ -244,9 +250,10 @@ Here's an example. Try to reason about what this function does:<d-footnote>If yo
 ```py
 import jax
 import jax.numpy as jnp
-import jax.sharding as shd
 
-mesh = jax.make_mesh((2, 4), ('x', 'y'), (shd.AxisType.Explicit, shd.AxisType.Explicit))
+Explicit = jax.sharding.AxisType.Explicit
+
+mesh = jax.make_mesh((2, 4), ('x', 'y'), (Explicit, Explicit))
 jax.set_mesh(mesh)
 
 x = jnp.arange(0, 512, dtype=jnp.int32, out_sharding=jax.P(('x', 'y')))
@@ -281,14 +288,14 @@ import functools
 
 import jax
 import jax.numpy as jnp
-import jax.sharding as shd
 import numpy as np
+
+Explicit = jax.sharding.AxisType.Explicit
 
 # This is intended to run on a TPU v5e-8 runtime. If you can't get this,
 # try setting jax.config.update('jax_num_cpu_devices', 8).
 #
-mesh = jax.make_mesh(axis_shapes=(2, 4), axis_names=('X', 'Y'),
-                                       axis_types=(shd.AxisType.Explicit, shd.AxisType.Explicit))
+mesh = jax.make_mesh(axis_shapes=(2, 4), axis_names=('X', 'Y'), axis_types=(Explicit, Explicit))
 jax.set_mesh(mesh)
 
 B, D, F = 1024, 2048, 8192
@@ -324,7 +331,7 @@ def collective_matmul_allgather_lhs_contracting(lhs, rhs):
     return accum + update, lhs
 
   accum = jnp.zeros((lhs.shape[0], rhs.shape[1]), dtype=lhs.dtype)
-  accum = jax.lax.pvary(accum, ('X', 'Y'))
+  accum = jax.lax.pcast(accum, ('X', 'Y'), to='varying')
   accum, lhs = jax.lax.fori_loop(0, axis_size - 1, f, (accum, lhs), unroll=True)
 
   # Compute the last chunk after the final permute to leave lhs in the state we found it
@@ -375,7 +382,9 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-mesh = jax.make_mesh((4, 2), ('X','Y'))
+Auto = jax.sharding.AxisType.Auto
+
+mesh = jax.make_mesh((4, 2), ('X','Y'), (Auto, Auto))
 
 average_shmap = jax.shard_map(
     lambda x: x.mean(keepdims=True),
@@ -408,7 +417,9 @@ import jax.numpy as jnp
 
 import functools
 
-mesh = jax.make_mesh((4, 2), ('X','Y'))
+Auto = jax.sharding.AxisType.Auto
+
+mesh = jax.make_mesh((4, 2), ('X','Y'), (Auto, Auto))
 
 def shift_shmap(x, shift: int):
   shmapped = jax.shard_map(
