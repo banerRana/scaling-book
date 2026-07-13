@@ -8,10 +8,13 @@ position inside its gray square encodes the shard's *global* position in the
 array, which travels with the content — so transposing the device-square
 contents of the original PNGs produces the corrected figures pixel-perfectly:
 
-* colored3 / colored4 / each of the 9 panels of colored5: swap the top-right
+* colored3 / colored4 / the single-axis panels of colored5: swap the top-right
   and bottom-left square contents.
-* colored6: the new X-first traversal picture is the old Y-first picture
-  (snake arrow included), so the two panels' pictures swap under their titles.
+* colored5's multi-axis panels (I_xy and J_xy) and both colored6 panels are
+  NOT transposed: flattened shardings like I_XY assign block i to device i
+  with the first-named axis major (matching jax.P(('X', 'Y')) reshape order),
+  which reads the same under either axis convention, so the original panels
+  were already correct.
 
 sharding-example.png instead has its green axis labels swapped: the horizontal
 arrow was labeled I_X and the vertical J_Y; the ink is rotated 90 degrees and
@@ -20,7 +23,7 @@ sharding_figure.py instead.)
 
 Run against pristine originals (e.g. from git), not already-converted files.
 Pass step names to run a subset:
-  uv run --with pillow --with numpy python _scripts/transpose_sharding_figures.py [3 4 5 6 example subscripts]
+  uv run --with pillow --with numpy python _scripts/transpose_sharding_figures.py [3 4 5 example subscripts]
 """
 
 import sys
@@ -71,31 +74,27 @@ def swap_regions(a: np.ndarray, xa: tuple, ya: tuple, xb: tuple,
   a[by:by + h, bx:bx + w] = tmp
 
 
-def transpose_panels(name: str) -> None:
-  """Swaps top-right and bottom-left squares of every 2x2 panel in a figure."""
+def transpose_panels(name: str, skip: frozenset = frozenset()) -> None:
+  """Swaps top-right and bottom-left squares of every 2x2 panel in a figure.
+
+  Args:
+    name: Figure filename under assets/img.
+    skip: (panel_row, panel_col) pairs to leave untouched — used for the
+      multi-axis (flattened) sharding panels, which are convention-agnostic.
+  """
   path = f'{IMG}/{name}'
   a = np.array(PIL.Image.open(path).convert('RGB'))
   xs, ys = square_ranges(a)
   assert len(xs) % 2 == 0 and len(ys) % 2 == 0, (name, xs, ys)
   for pr in range(len(ys) // 2):
     for pc in range(len(xs) // 2):
+      if (pr, pc) in skip:
+        continue
       r0, r1 = ys[2 * pr], ys[2 * pr + 1]
       c0, c1 = xs[2 * pc], xs[2 * pc + 1]
       swap_regions(a, c1, r0, c0, r1)  # top-right <-> bottom-left
   PIL.Image.fromarray(a).save(path)
-  print(f'{name}: transposed {len(ys) // 2}x{len(xs) // 2} panel(s)')
-
-
-def swap_colored6() -> None:
-  """Swaps the two panel pictures of colored6, leaving the titles in place."""
-  path = f'{IMG}/sharding-colored6.png'
-  a = np.array(PIL.Image.open(path).convert('RGB'))
-  xs, ys = square_ranges(a)
-  assert len(xs) == 4 and len(ys) == 2, (xs, ys)
-  yr = (ys[0][0], ys[1][1])
-  swap_regions(a, (xs[0][0], xs[1][1]), yr, (xs[2][0], xs[3][1]), yr)
-  PIL.Image.fromarray(a).save(path)
-  print('sharding-colored6.png: swapped panel pictures')
+  print(f'{name}: transposed panels (skipped {len(skip)})')
 
 
 def swap_example_labels() -> None:
@@ -216,14 +215,17 @@ def subscript_titles(name: str, titles: list, bands: int) -> None:
 
 
 if __name__ == '__main__':
-  steps = sys.argv[1:] or ['3', '4', '5', '6', 'example', 'subscripts']
+  steps = sys.argv[1:] or ['3', '4', '5', 'example', 'subscripts']
   for step in steps:
-    if step == '6':
-      swap_colored6()
-    elif step == 'example':
+    if step == 'example':
       swap_example_labels()
     elif step == 'subscripts':
       subscript_titles('sharding-colored5.png', TITLES5, bands=3)
       subscript_titles('sharding-colored6.png', TITLES6, bands=1)
+    elif step == '5':
+      # The I_xy (row 1, col 1) and J_xy (row 2, col 2) panels shard over a
+      # flattened multi-axis dimension and are correct as originally drawn.
+      transpose_panels('sharding-colored5.png',
+                       skip=frozenset({(1, 1), (2, 2)}))
     else:
       transpose_panels(f'sharding-colored{step}.png')
